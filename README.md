@@ -43,3 +43,31 @@ client := &http.Client{
 
 resp, err := client.Get("https://example.com")
 ```
+
+## Configuration
+
+You can configure additional transport options like timeouts and so on:
+
+```go
+import (
+    "net"
+    "time"
+)
+
+client := &http.Client{
+    Transport: dynamictls.New(dynamictls.Config{
+        PrimaryLoader:   primary,
+        SecondaryLoader: secondary,
+        BaseTLS: &tls.Config{
+            MinVersion: tls.VersionTLS12,
+        },
+        // Custom dialer
+        DialContext: (&net.Dialer{
+            Timeout:   28 * time.Second,
+            KeepAlive: 13 * time.Second,
+        }).DialContext,
+        // Connection timeouts
+        IdleConnTimeout:       28 * time.Second,
+    }),
+}
+```

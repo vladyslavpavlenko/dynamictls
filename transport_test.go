@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -266,5 +268,43 @@ func TestTransport_RoundTrip(main *testing.T) {
 		resp, err := transport.RoundTrip(req)
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
+	})
+
+	main.Run("CustomTransportOptions", func(t *testing.T) {
+		server := setUp(t)
+
+		customDialerCalled := false
+		customDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			customDialerCalled = true
+			return (&net.Dialer{
+				Timeout:   28 * time.Second,
+				KeepAlive: 13 * time.Second,
+			}).DialContext(ctx, network, addr)
+		}
+
+		pLoader := func() (*tls.Certificate, error) {
+			return generateTLSKeyPair()
+		}
+
+		sLoader := func() (*tls.Certificate, error) {
+			return generateTLSKeyPair()
+		}
+
+		transport := dynamictls.New(dynamictls.Config{
+			PrimaryLoader:   pLoader,
+			SecondaryLoader: sLoader,
+			BaseTLS:         &tls.Config{InsecureSkipVerify: true},
+			DialContext:     customDialer,
+			IdleConnTimeout: 28 * time.Second,
+		})
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, http.NoBody)
+		require.NoError(t, err)
+
+		resp, err := transport.RoundTrip(req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+
+		assert.True(t, customDialerCalled)
 	})
 }

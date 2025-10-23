@@ -1,10 +1,13 @@
 package dynamictls
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 const threshold = 3
@@ -20,6 +23,10 @@ type Transport struct {
 
 	pFailures atomic.Uint32
 	threshold uint32
+
+	// Transport configuration
+	dialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
+	idleConnTimeout time.Duration
 }
 
 type Config struct {
@@ -35,6 +42,17 @@ type Config struct {
 	// Threshold is the number of consecutive failures before a secondary
 	// certificate is tried. The default is 3.
 	Threshold uint32
+
+	// DialContext specifies the dial function for creating unencrypted TCP connections.
+	// If nil, the default dialer is used.
+	// By default, inherited from [http.DefaultTransport].
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// IdleConnTimeout is the maximum amount of time an idle (keep-alive) connection
+	// will remain idle before closing itself.
+	// Zero means no limit.
+	// By default, inherited from [http.DefaultTransport].
+	IdleConnTimeout time.Duration
 }
 
 func New(cfg Config) *Transport {
@@ -43,10 +61,12 @@ func New(cfg Config) *Transport {
 	}
 
 	return &Transport{
-		pLoader:   cfg.PrimaryLoader,
-		sLoader:   cfg.SecondaryLoader,
-		baseTLS:   cfg.BaseTLS,
-		threshold: cfg.Threshold,
+		pLoader:         cfg.PrimaryLoader,
+		sLoader:         cfg.SecondaryLoader,
+		baseTLS:         cfg.BaseTLS,
+		threshold:       cfg.Threshold,
+		dialContext:     cfg.DialContext,
+		idleConnTimeout: cfg.IdleConnTimeout,
 	}
 }
 
@@ -107,6 +127,13 @@ func (t *Transport) do(req *http.Request, loader Loader) (*http.Response, error)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
+
+	if t.dialContext != nil {
+		transport.DialContext = t.dialContext
+	}
+	if t.idleConnTimeout != 0 {
+		transport.IdleConnTimeout = t.idleConnTimeout
+	}
 
 	return transport.RoundTrip(req)
 }
