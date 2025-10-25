@@ -1,6 +1,8 @@
 # dynamictls
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/vladyslavpavlenko/dynamictls.svg)](https://pkg.go.dev/github.com/vladyslavpavlenko/dynamictls)
+[![CI](https://github.com/vladyslavpavlenko/dynamictls/workflows/CI/badge.svg)](https://github.com/vladyslavpavlenko/dynamictls/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/vladyslavpavlenko/dynamictls)](https://goreportcard.com/report/github.com/vladyslavpavlenko/dynamictls)
 
 This package provides an `http.RoundTripper` that adds automatic TLS certificate failover to `http.Client`. The rotation happens without losing requests.
 
