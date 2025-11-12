@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Unit Tests
+  format:
+    name: Check Formatting
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,11 +31,23 @@ jobs:
             exit 1
           fi
 
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
       - name: Run tests
         run: go test -v -race ./...
 
   benchmark:
-    name: Benchmark
+    name: Benchmarks
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -48,7 +60,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Run benchmark
+      - name: Run benchmarks
         run: go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s ./... | tee benchmark.txt
 
       - name: Store benchmark result
@@ -58,7 +70,7 @@ jobs:
           tool: 'go'
           output-file-path: benchmark.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
+          auto-push: false
           alert-threshold: '20%'
           comment-on-alert: true
           fail-on-alert: false

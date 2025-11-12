@@ -308,6 +308,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		assert.True(t, customDialerCalled)
 	})
 }
+
 func BenchmarkTransport_RoundTrip(b *testing.B) {
 	tlsCert, err := generateTLSKeyPair()
 	require.NoError(b, err)
