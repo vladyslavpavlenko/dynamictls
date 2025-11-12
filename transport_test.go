@@ -227,8 +227,6 @@ func TestTransport_RoundTrip(main *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
 
-		// Request 1-3: Primary fails (pCallCount = 3), then secondary succeeds (sCallCount = 3)
-		// Request 4: After threshold, secondary tried first (sCallCount = 4), succeeds, no primary call
 		assert.Equal(t, []string{"sLoader"}, callOrder)
 		assert.Equal(t, 3, pCallCount)
 		assert.Equal(t, 4, sCallCount)
