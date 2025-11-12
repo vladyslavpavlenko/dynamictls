@@ -308,3 +308,54 @@ func TestTransport_RoundTrip(main *testing.T) {
 		assert.True(t, customDialerCalled)
 	})
 }
+func BenchmarkTransport_RoundTrip(b *testing.B) {
+	tlsCert, err := generateTLSKeyPair()
+	require.NoError(b, err)
+
+	serverTLSConfig := &tls.Config{
+		Certificates: []tls.Certificate{*tlsCert},
+	}
+
+	server := httptest.NewUnstartedServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+	server.TLS = serverTLSConfig
+	server.StartTLS()
+
+	b.Cleanup(server.Close)
+
+	pLoader := func() (*tls.Certificate, error) {
+		return generateTLSKeyPair()
+	}
+
+	sLoader := func() (*tls.Certificate, error) {
+		return generateTLSKeyPair()
+	}
+
+	transport := dynamictls.New(dynamictls.Config{
+		PrimaryLoader:   pLoader,
+		SecondaryLoader: sLoader,
+		BaseTLS: &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS13,
+		},
+	})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, http.NoBody)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			b.Fatalf("RoundTrip failed: %v", err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			b.Fatalf("Failed to close response body: %v", err)
+		}
+	}
+}

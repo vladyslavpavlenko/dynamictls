@@ -34,3 +34,31 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run benchmark
+        run: go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s ./... | tee benchmark.txt
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Transport Benchmark
+          tool: 'go'
+          output-file-path: benchmark.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '20%'
+          comment-on-alert: true
+          fail-on-alert: false
