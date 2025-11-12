@@ -7,14 +7,14 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Unit Tests
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
@@ -24,12 +24,23 @@ jobs:
 
       - name: Check formatting
         run: |
-          gofumpt -l .
           if [ -n "$(gofumpt -l .)" ]; then
             echo "The following files are not formatted with gofumpt:"
             gofumpt -l .
             exit 1
           fi
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
 
       - name: Run tests
         run: go test -v -race ./...
