@@ -48,6 +48,9 @@ jobs:
 
   benchmark:
     name: Benchmarks
+    strategy:
+      matrix:
+        go-version: ['1.24']
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -58,19 +61,20 @@ jobs:
       - name: Setup go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version: ${{ matrix.go-version }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg
+          key: ${{ runner.os }}-go-pkg-${{ hashFiles('**/go.mod') }}
+
+      - name: Cache benchmark results
+        uses: actions/cache@v4
+        with:
+          path: |
+            bench-master.txt
+          key: ${{ runner.os }}-bench-${{ (github.event.pull_request.base.sha != github.event.after) && github.event.pull_request.base.sha || github.event.after }}
 
       - name: Run benchmarks
-        run: go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s ./... | tee benchmark.txt
-
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Transport Benchmark
-          tool: 'go'
-          output-file-path: benchmark.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          alert-threshold: '20%'
-          comment-on-alert: true
-          fail-on-alert: false
+        run: go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s ./...
