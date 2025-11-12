@@ -7,14 +7,14 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Unit Tests
+  format:
+    name: Check Formatting
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
@@ -31,6 +31,92 @@ jobs:
             exit 1
           fi
 
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
       - name: Run tests
         run: go test -v -race ./...
 
+  benchmark:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: go.mod
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Run benchmarks
+        run: go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s -count=1 ./... > benchmark-new.txt
+
+      - name: Get baseline benchmark
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git checkout ${{ github.event.pull_request.base.sha }}
+            go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s -count=1 ./... > benchmark-base.txt || echo "Baseline benchmark failed, skipping comparison"
+            git checkout ${{ github.sha }}
+          else
+            # For push to main, compare with previous main commit
+            git checkout HEAD~1
+            go test -bench=BenchmarkTransport_RoundTrip -benchmem -benchtime=10s -count=1 ./... > benchmark-base.txt || echo "Baseline benchmark failed, skipping comparison"
+            git checkout ${{ github.sha }}
+          fi
+
+      - name: Compare benchmarks
+        run: |
+          if [ -f benchmark-base.txt ] && [ -f benchmark-new.txt ]; then
+            echo "Comparing benchmarks..."
+            benchstat -delta-test=none benchmark-base.txt benchmark-new.txt > comparison.txt || true
+            cat comparison.txt
+            
+            # Extract ns/op values (format: "52971488 ns/op")
+            NEW_NS=$(grep "ns/op" benchmark-new.txt | awk '{print $1}' | head -1)
+            BASE_NS=$(grep "ns/op" benchmark-base.txt | awk '{print $1}' | head -1)
+            
+            # Extract B/op values (format: "748992 B/op")
+            NEW_B=$(grep "B/op" benchmark-new.txt | awk '{print $1}' | head -1)
+            BASE_B=$(grep "B/op" benchmark-base.txt | awk '{print $1}' | head -1)
+            
+            if [ -n "$NEW_NS" ] && [ -n "$BASE_NS" ] && [ "$NEW_NS" != "0" ] && [ "$BASE_NS" != "0" ]; then
+              # Calculate 20% threshold using awk (more reliable than bc)
+              THRESHOLD=$(awk "BEGIN {printf \"%.0f\", $BASE_NS * 1.2}")
+              if [ "$NEW_NS" -gt "$THRESHOLD" ]; then
+                echo "❌ Performance regression detected!"
+                echo "Base: ${BASE_NS}ns/op, New: ${NEW_NS}ns/op (threshold: ${THRESHOLD}ns/op)"
+                exit 1
+              fi
+              echo "✅ Performance check passed: ${BASE_NS}ns/op -> ${NEW_NS}ns/op"
+            fi
+            
+            if [ -n "$NEW_B" ] && [ -n "$BASE_B" ] && [ "$NEW_B" != "0" ] && [ "$BASE_B" != "0" ]; then
+              THRESHOLD_B=$(awk "BEGIN {printf \"%.0f\", $BASE_B * 1.2}")
+              if [ "$NEW_B" -gt "$THRESHOLD_B" ]; then
+                echo "❌ Memory allocation regression detected!"
+                echo "Base: ${BASE_B}B/op, New: ${NEW_B}B/op (threshold: ${THRESHOLD_B}B/op)"
+                exit 1
+              fi
+              echo "✅ Memory check passed: ${BASE_B}B/op -> ${NEW_B}B/op"
+            fi
+            
+            echo "✅ Benchmark comparison passed"
+          else
+            echo "⚠️  No baseline benchmark found, skipping comparison"
+          fi
