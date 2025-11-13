@@ -3,6 +3,7 @@ package dynamictls
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -114,20 +115,30 @@ func (t *Transport) do(req *http.Request, l Loader, c *atomic.Pointer[http.Trans
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	transport = c.Load()
 	if transport != nil {
+		t.mu.Unlock()
 		return transport.RoundTrip(req)
 	}
 
-	tlsConfig := t.baseTLS.Clone()
-	tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		return l()
+	cert, err := l()
+	if err != nil {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("load certificate: %w", err)
 	}
 
+	var baseTLS *tls.Config
+	if t.baseTLS != nil {
+		baseTLS = t.baseTLS.Clone()
+	} else {
+		baseTLS = &tls.Config{}
+	}
+
+	baseTLS.Certificates = []tls.Certificate{*cert}
+
 	transport = http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
+	transport.TLSClientConfig = baseTLS
 
 	if t.dialContext != nil {
 		transport.DialContext = t.dialContext
@@ -137,6 +148,7 @@ func (t *Transport) do(req *http.Request, l Loader, c *atomic.Pointer[http.Trans
 	}
 
 	c.Store(transport)
+	t.mu.Unlock()
 
 	return transport.RoundTrip(req)
 }

@@ -137,7 +137,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		require.NoError(t, err)
 
 		_, err = transport.RoundTrip(req)
-		require.EqualError(t, err, "sloader error")
+		require.EqualError(t, err, "load certificate: sloader error")
 	})
 
 	main.Run("AlwaysTriesBothCerts", func(t *testing.T) {
