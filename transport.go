@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -14,8 +15,6 @@ const threshold = 3
 
 type Loader func() (*tls.Certificate, error)
 
-// Transport is an http.RoundTripper that tries both primary and secondary
-// TLS certificates on errors to ensure no request is left unprocessed.
 type Transport struct {
 	pLoader Loader
 	sLoader Loader
@@ -23,6 +22,10 @@ type Transport struct {
 
 	pFailures atomic.Uint32
 	threshold uint32
+
+	pTransport atomic.Pointer[http.Transport]
+	sTransport atomic.Pointer[http.Transport]
+	mu         sync.RWMutex
 
 	// Transport configuration
 	dialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -78,24 +81,23 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if trySecondaryFirst {
 		// Try secondary first
-		resp, err := t.do(req, t.sLoader)
+		resp, err := t.do(req, t.sLoader, &t.sTransport)
 		if err == nil {
 			return resp, nil
 		}
 
 		// SecondaryLoader failed, try primary
-		resp, err = t.do(req, t.pLoader)
+		resp, err = t.do(req, t.pLoader, &t.pTransport)
 		if err == nil {
 			// PrimaryLoader succeeded, reset failure counter
 			t.pFailures.Store(0)
 			return resp, nil
 		}
-
 		return nil, err
 	}
 
 	// Try primary first
-	resp, err := t.do(req, t.pLoader)
+	resp, err := t.do(req, t.pLoader, &t.pTransport)
 	if err == nil {
 		t.pFailures.Store(0)
 		return resp, nil
@@ -103,30 +105,40 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// PrimaryLoader failed
 	t.pFailures.Add(1)
-
-	// Try secondary
-	resp, err = t.do(req, t.sLoader)
-	if err == nil {
-		return resp, nil
-	}
-
-	return nil, err
+	return t.do(req, t.sLoader, &t.sTransport)
 }
 
-func (t *Transport) do(req *http.Request, loader Loader) (*http.Response, error) {
-	cert, err := loader()
+func (t *Transport) do(req *http.Request, l Loader, c *atomic.Pointer[http.Transport]) (*http.Response, error) {
+	transport := c.Load()
+	if transport != nil {
+		return transport.RoundTrip(req)
+	}
+
+	t.mu.Lock()
+
+	transport = c.Load()
+	if transport != nil {
+		t.mu.Unlock()
+		return transport.RoundTrip(req)
+	}
+
+	cert, err := l()
 	if err != nil {
-		return nil, fmt.Errorf("loader: %v", err)
+		t.mu.Unlock()
+		return nil, fmt.Errorf("load certificate: %w", err)
 	}
 
-	tlsConfig := t.baseTLS.Clone()
-	tlsConfig.Certificates = []tls.Certificate{*cert}
-	tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		return cert, nil
+	var baseTLS *tls.Config
+	if t.baseTLS != nil {
+		baseTLS = t.baseTLS.Clone()
+	} else {
+		baseTLS = &tls.Config{}
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
+	baseTLS.Certificates = []tls.Certificate{*cert}
+
+	transport = http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = baseTLS
 
 	if t.dialContext != nil {
 		transport.DialContext = t.dialContext
@@ -135,5 +147,18 @@ func (t *Transport) do(req *http.Request, loader Loader) (*http.Response, error)
 		transport.IdleConnTimeout = t.idleConnTimeout
 	}
 
+	c.Store(transport)
+	t.mu.Unlock()
+
 	return transport.RoundTrip(req)
+}
+
+// RefreshCertificates forces a refresh of both certificates on the next request
+func (t *Transport) RefreshCertificates() {
+	if old := t.pTransport.Swap(nil); old != nil {
+		old.CloseIdleConnections()
+	}
+	if old := t.sTransport.Swap(nil); old != nil {
+		old.CloseIdleConnections()
+	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 
 		serverTLSConfig := &tls.Config{
 			Certificates: []tls.Certificate{*tlsCert},
+			ClientAuth:   tls.RequestClientCert,
 		}
 
 		server := httptest.NewUnstartedServer(
@@ -30,6 +33,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 			}),
 		)
 		server.TLS = serverTLSConfig
+		server.Config.ErrorLog = log.New(io.Discard, "", 0)
 		server.StartTLS()
 
 		t.Cleanup(server.Close)
@@ -112,15 +116,12 @@ func TestTransport_RoundTrip(main *testing.T) {
 	main.Run("BothFail", func(t *testing.T) {
 		server := setUp(t)
 
-		pErr := errors.New("ploader error")
-		sErr := errors.New("sloader error")
-
 		pLoader := func() (*tls.Certificate, error) {
-			return nil, pErr
+			return nil, errors.New("ploader error")
 		}
 
 		sLoader := func() (*tls.Certificate, error) {
-			return nil, sErr
+			return nil, errors.New("sloader error")
 		}
 
 		transport := dynamictls.New(dynamictls.Config{
@@ -136,7 +137,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		require.NoError(t, err)
 
 		_, err = transport.RoundTrip(req)
-		require.EqualError(t, err, "loader: sloader error")
+		require.EqualError(t, err, "load certificate: sloader error")
 	})
 
 	main.Run("AlwaysTriesBothCerts", func(t *testing.T) {
@@ -177,7 +178,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		require.NoError(t, resp2.Body.Close())
 
 		assert.Equal(t, 2, pCallCount)
-		assert.Equal(t, 2, sCallCount)
+		assert.Equal(t, 1, sCallCount)
 	})
 
 	main.Run("SwitchesToSecondaryFirstAfterThreshold", func(t *testing.T) {
@@ -209,6 +210,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		})
 
 		for range 3 {
+			transport.RefreshCertificates()
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, http.NoBody)
 			require.NoError(t, err)
 			resp, err := transport.RoundTrip(req)
@@ -217,6 +219,7 @@ func TestTransport_RoundTrip(main *testing.T) {
 		}
 
 		callOrder = nil
+		transport.RefreshCertificates()
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, http.NoBody)
 		require.NoError(t, err)
@@ -307,4 +310,57 @@ func TestTransport_RoundTrip(main *testing.T) {
 
 		assert.True(t, customDialerCalled)
 	})
+}
+
+func BenchmarkTransport_RoundTrip(b *testing.B) {
+	tlsCert, err := generateTLSKeyPair()
+	require.NoError(b, err)
+
+	serverTLSConfig := &tls.Config{
+		Certificates: []tls.Certificate{*tlsCert},
+		ClientAuth:   tls.RequestClientCert,
+	}
+
+	server := httptest.NewUnstartedServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+	server.TLS = serverTLSConfig
+	server.StartTLS()
+
+	b.Cleanup(server.Close)
+
+	pLoader := func() (*tls.Certificate, error) {
+		return generateTLSKeyPair()
+	}
+
+	sLoader := func() (*tls.Certificate, error) {
+		return generateTLSKeyPair()
+	}
+
+	transport := dynamictls.New(dynamictls.Config{
+		PrimaryLoader:   pLoader,
+		SecondaryLoader: sLoader,
+		BaseTLS: &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS13,
+		},
+	})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, http.NoBody)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			b.Fatalf("RoundTrip failed: %v", err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			b.Fatalf("Failed to close response body: %v", err)
+		}
+	}
 }
